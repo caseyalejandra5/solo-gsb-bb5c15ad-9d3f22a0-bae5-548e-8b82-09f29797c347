@@ -2359,6 +2359,168 @@ button {
   }
 }
 
+/* ---------- 标注关系 ---------- */
+
+.side-heading-relation {
+  color: var(--warn);
+}
+
+.relation-count-badge {
+  background: var(--warn);
+}
+
+.rel-form {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+.rel-form .form-label {
+  margin: 8px 0 4px;
+}
+
+.rel-select {
+  width: 100%;
+  background: #fff;
+}
+
+.rel-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.rel-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.rel-summary {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.rel-summary-bad {
+  color: #c0392b;
+}
+
+.rel-filter-row {
+  margin-bottom: 10px;
+}
+
+.rel-filter-row .form-label {
+  margin: 0 0 4px;
+}
+
+.rel-item {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.rel-item-invalid {
+  border-color: #e8c98a;
+  background: #fffdf6;
+}
+
+.rel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rel-type {
+  display: inline-block;
+  padding: 1px 10px;
+  background: #eef4ff;
+  color: #1d4fa1;
+  border: 1px solid #cfdefc;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.rel-flag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 9px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.rel-flag-ok {
+  background: #e7f6ec;
+  color: #1e7e34;
+}
+
+.rel-flag-bad {
+  background: #fdecea;
+  color: #b3261e;
+}
+
+.rel-ends {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rel-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 45%;
+}
+
+.rel-end-btn {
+  border: 0;
+  padding: 2px 4px;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+
+.rel-end-btn:hover {
+  background: #f0f4ff;
+}
+
+.rel-end-active {
+  box-shadow: 0 0 0 2px rgba(47, 107, 255, 0.25);
+}
+
+.rel-end-quote {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.rel-end-missing,
+.rel-end-pending {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+}
+
+.rel-arrow {
+  color: var(--ink-faint);
+  font-weight: 700;
+  align-self: center;
+}
+
+.rel-reason {
+  margin: 6px 0 0;
+  color: #c0392b;
+  font-size: 12.5px;
+}
+
 /* ---------- 审阅报告 ---------- */
 
 .report-summary {

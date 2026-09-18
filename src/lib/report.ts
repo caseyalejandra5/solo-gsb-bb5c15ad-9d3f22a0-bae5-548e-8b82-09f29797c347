@@ -2,16 +2,18 @@
 //
 // 纯函数：只读取传入数据、不修改任何字段、不触碰 localStorage。
 // 报告内容：
-//   1. 开头汇总：标注总数、待处理数、未忽略冲突数、覆盖问题数；
+//   1. 开头汇总：标注总数、待处理数、未忽略冲突数、覆盖问题数、有效 / 失效关系数；
 //   2. 按原文位置渲染的全文：已绑定标注的高亮（多色叠加）、冲突交叠描边、覆盖缺口/重叠底色，
 //      段首上标序号可跳到对应标注明细；
 //   3. 已绑定标注明细（引文、位置、标签、备注）；
 //   4. 待处理标注（引文、标签、备注、待处理原因）；
 //   5. 未忽略冲突及冲突双方（引文、标签、位置、备注、交叠原文）；
-//   6. 覆盖审计问题（缺口 / 重叠的原文摘录、位置与涉及标注）。
+//   6. 覆盖审计问题（缺口 / 重叠的原文摘录、位置与涉及标注）；
+//   7. 标注关系：有效 / 失效分组明细（类型、源 → 目标引文，失效项附原因）。
 
 import type {
   Annotation,
+  AnnotationRelation,
   ConflictRule,
   IgnoredConflict,
 } from '../types'
@@ -26,6 +28,7 @@ import {
   isConflictSegment,
 } from './conflicts'
 import { auditCoverage } from './coverage'
+import { listRelations, summarizeRelations } from './relations'
 
 export interface ReportInput {
   title: string
@@ -34,6 +37,7 @@ export interface ReportInput {
   conflictRules: ConflictRule[]
   ignoredConflicts: IgnoredConflict[]
   coverageTags: string[]
+  relations: AnnotationRelation[]
 }
 
 export interface ReportStats {
@@ -45,6 +49,10 @@ export interface ReportStats {
   conflicts: number
   /** 覆盖问题数（缺口 + 重叠；未配置覆盖标签时为 0） */
   coverageIssues: number
+  /** 有效关系数（两端标注均存在且已绑定） */
+  relationsValid: number
+  /** 失效关系数（任一端被删除或待处理） */
+  relationsInvalid: number
 }
 
 export interface ReviewReport {
@@ -128,6 +136,10 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
   const activeConflicts = conflicts.filter((c) => !c.ignored)
   const ignoredConflictCount = conflicts.length - activeConflicts.length
   const coverage = auditCoverage(annotations, text.length, input.coverageTags)
+  const relationItems = listRelations(input.relations, annotations)
+  const relationSummary = summarizeRelations(relationItems)
+  const validRelationItems = relationItems.filter((i) => i.valid)
+  const invalidRelationItems = relationItems.filter((i) => !i.valid)
 
   const pendingAnnotations = annotations
     .filter((a) => a.status === 'pending')
@@ -161,6 +173,8 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
     pending: pendingAnnotations.length,
     conflicts: activeConflicts.length,
     coverageIssues: coverage.gapCount + coverage.overlapCount,
+    relationsValid: relationSummary.valid,
+    relationsInvalid: relationSummary.invalid,
   }
 
   // ---------- 原文（按位置渲染高亮 / 冲突 / 覆盖问题） ----------
@@ -318,6 +332,40 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
     })
     .join('')
 
+  // ---------- 标注关系 ----------
+
+  /** 关系一端：已绑定标注给序号链接；待处理 / 已删除给占位说明 */
+  const relationEndHtml = (a: Annotation | null): string => {
+    if (!a) return '<span class="rep-rel-missing">（标注已删除）</span>'
+    const n = numberById.get(a.id)
+    const head = n
+      ? `<a class="rep-ann-num rep-ann-num-link" href="#ann-${n}" title="跳到标注 ${n}">${n}</a>`
+      : '<span class="rep-ann-num rep-ann-num-pending">!</span>'
+    const status = a.status === 'bound' ? '' : '<span class="rep-rel-pending">（待处理）</span>'
+    return (
+      `<span class="rep-rel-end">${head}` +
+      `<span class="rep-rel-quote">「${htmlWithBreaks(a.quote) || '<span class="rep-muted">（空引文）</span>'}」</span>` +
+      `${status}</span>`
+    )
+  }
+
+  const relationItemHtml = (item: (typeof relationItems)[number]): string =>
+    `<li class="rep-rel-item${item.valid ? '' : ' rep-rel-invalid'}">` +
+    `<div class="rep-rel-head"><span class="rep-rel-type">${escapeHtml(item.relation.type)}</span>` +
+    (item.valid
+      ? '<span class="rep-rel-flag rep-rel-flag-ok">有效</span>'
+      : '<span class="rep-rel-flag rep-rel-flag-bad">失效</span>') +
+    `</div>` +
+    `<div class="rep-rel-ends">${relationEndHtml(item.source)}` +
+    `<span class="rep-rel-arrow">→</span>${relationEndHtml(item.target)}</div>` +
+    (item.invalidReason
+      ? `<p class="rep-rel-reason">失效原因：${escapeHtml(item.invalidReason)}</p>`
+      : '') +
+    `</li>`
+
+  const validRelationHtml = validRelationItems.map(relationItemHtml).join('')
+  const invalidRelationHtml = invalidRelationItems.map(relationItemHtml).join('')
+
   // ---------- 组装 ----------
 
   const escTitle = escapeHtml(title || '未命名文档')
@@ -348,8 +396,10 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
       <li class="rep-stat${stats.pending > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.pending}</span><span class="rep-stat-label">待处理</span></li>
       <li class="rep-stat${stats.conflicts > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.conflicts}</span><span class="rep-stat-label">冲突</span></li>
       <li class="rep-stat${stats.coverageIssues > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.coverageIssues}</span><span class="rep-stat-label">覆盖问题</span></li>
+      <li class="rep-stat"><span class="rep-stat-num">${stats.relationsValid}</span><span class="rep-stat-label">有效关系</span></li>
+      <li class="rep-stat${stats.relationsInvalid > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.relationsInvalid}</span><span class="rep-stat-label">失效关系</span></li>
     </ul>
-    <p class="rep-meta">冲突仅统计未忽略项${ignoredConflictCount > 0 ? `（另有 ${ignoredConflictCount} 条已忽略）` : ''}；覆盖问题为缺口与重叠之和。</p>
+    <p class="rep-meta">冲突仅统计未忽略项${ignoredConflictCount > 0 ? `（另有 ${ignoredConflictCount} 条已忽略）` : ''}；覆盖问题为缺口与重叠之和；关系在端点标注被删除或进入待处理时失效，重新绑定后恢复。</p>
   </section>
 
   <section class="rep-section">
@@ -391,6 +441,23 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
       stats.coverageIssues === 0
         ? `<p class="rep-muted">${input.coverageTags.length > 0 ? '所选标签覆盖下没有缺口或重叠。' : '未配置覆盖审计标签。'}</p>`
         : `<ul class="rep-cov-list">${coverageItems}</ul>`
+    }
+  </section>
+
+  <section class="rep-section">
+    <h2>标注关系（${relationItems.length}）</h2>
+    ${
+      relationItems.length === 0
+        ? '<p class="rep-muted">没有标注关系。</p>'
+        : `<p class="rep-meta">有效 ${relationSummary.valid} 条 · 失效 ${relationSummary.invalid} 条；失效关系在端点标注重新绑定后自动恢复。</p>` +
+          `<h3 class="rep-sub">有效关系（${relationSummary.valid}）</h3>` +
+          (validRelationItems.length === 0
+            ? '<p class="rep-muted">没有有效关系。</p>'
+            : `<ol class="rep-rel-list">${validRelationHtml}</ol>`) +
+          `<h3 class="rep-sub">失效关系（${relationSummary.invalid}）</h3>` +
+          (invalidRelationItems.length === 0
+            ? '<p class="rep-muted">没有失效关系。</p>'
+            : `<ol class="rep-rel-list">${invalidRelationHtml}</ol>`)
     }
   </section>
 
@@ -517,6 +584,30 @@ body {
 .rep-cov-flag-overlap { background: #f59e0b; }
 .rep-cov-anns { margin: 6px 0 0; padding-left: 20px; }
 .rep-cov-anns li { margin: 4px 0; }
+.rep-sub { margin: 14px 0 8px; font-size: 14.5px; }
+.rep-rel-list { margin: 0; padding: 0; list-style: none; }
+.rep-rel-item {
+  border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; margin: 10px 0;
+}
+.rep-rel-invalid { border-color: #f0b8b4; background: #fdf8f7; }
+.rep-rel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rep-rel-type {
+  display: inline-block; padding: 1px 10px;
+  background: #eef4ff; color: #1d4fa1; border: 1px solid #cfdefc;
+  border-radius: 10px; font-size: 12.5px; font-weight: 600;
+}
+.rep-rel-flag {
+  display: inline-block; padding: 1px 8px; border-radius: 9px;
+  font-size: 11.5px; font-weight: 700;
+}
+.rep-rel-flag-ok { background: #e7f6ec; color: #1e7e34; }
+.rep-rel-flag-bad { background: #fdecea; color: #b3261e; }
+.rep-rel-ends { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.rep-rel-end { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.rep-rel-quote { word-break: break-word; }
+.rep-rel-arrow { color: #6b7280; font-weight: 700; align-self: center; }
+.rep-rel-missing, .rep-rel-pending { color: #9ca3af; font-size: 13px; }
+.rep-rel-reason { margin: 6px 0 0; color: #c0392b; font-size: 13px; }
 .rep-footer { color: #9ca3af; font-size: 12.5px; text-align: center; margin-top: 24px; }
 @media print {
   body { background: #fff; }

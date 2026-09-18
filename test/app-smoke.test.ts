@@ -1480,6 +1480,8 @@ console.log('  ✓ 冲突审阅面板（含忽略折叠与交叠高亮）渲染�
   assert.ok(reportHtml.includes('报告备注'), '报告应含标注备注')
   assert.ok(reportHtml.includes('rep-hl-conflict'), '报告应渲染冲突交叠高亮')
   assert.ok(reportHtml.includes('消失的引文ZZZ'), '报告应列出待处理标注')
+  assert.ok(reportHtml.includes('标注关系'), '报告应含标注关系分区')
+  assert.ok(reportHtml.includes('没有标注关系'), '无关系时报告应展示空态')
   // 文件名：审阅报告_<标题>_<YYYY-MM-DD>.html
   assert.match(
     captured[0]!.filename,
@@ -1497,6 +1499,171 @@ console.log('  ✓ 冲突审阅面板（含忽略折叠与交叠高亮）渲染�
   rr.unmount()
   rc.remove()
   console.log('  ✓ 审阅报告：侧栏入口、HTML 下载、内容齐全、文件名规范且本地数据不变')
+}
+
+// 标注关系：建立（禁止自关联 / 完全重复）→ 类型筛选 → 删除标注自动失效 → 持久化
+{
+  const relText = '零一二三四五六七八九十'
+  const relDoc = {
+    title: '关系文档',
+    text: relText,
+    updatedAt: Date.now(),
+    annotations: [
+      {
+        id: 'rl_a',
+        quote: relText.slice(0, 2),
+        start: 0,
+        end: 2,
+        note: '',
+        tags: [],
+        status: 'bound',
+        createdAt: 1,
+        updatedAt: 1,
+        contextBefore: '',
+        contextAfter: '',
+      },
+      {
+        id: 'rl_b',
+        quote: relText.slice(3, 5),
+        start: 3,
+        end: 5,
+        note: '',
+        tags: [],
+        status: 'bound',
+        createdAt: 1,
+        updatedAt: 1,
+        contextBefore: '',
+        contextAfter: '',
+      },
+      {
+        id: 'rl_c',
+        quote: relText.slice(6, 8),
+        start: 6,
+        end: 8,
+        note: '',
+        tags: [],
+        status: 'bound',
+        createdAt: 1,
+        updatedAt: 1,
+        contextBefore: '',
+        contextAfter: '',
+      },
+    ],
+    relations: [
+      // 一条预置有效关系 a → b；一条引用已删除标注的关系（应展示为失效）
+      { id: 'rel_1', sourceId: 'rl_a', targetId: 'rl_b', type: '因果', createdAt: 100 },
+      { id: 'rel_2', sourceId: 'rl_c', targetId: 'rl_gone', type: '引用', createdAt: 200 },
+    ],
+  }
+  localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(relDoc))
+  const rc = document.createElement('div')
+  rc.id = 'rootrel'
+  document.body.appendChild(rc)
+  const rr = createRoot(rc)
+
+  await new Promise<void>((resolve) => {
+    rr.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+
+  const wait = () => new Promise<void>((resolve) => setTimeout(resolve, 150))
+  const saved = () => JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+  const setNativeValue = (el: HTMLInputElement, v: string) => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(el, v)
+    el.dispatchEvent(new window.Event('input', { bubbles: true }))
+  }
+  const setSelect = (el: HTMLSelectElement, v: string) => {
+    el.value = v
+    el.dispatchEvent(new window.Event('change', { bubbles: true }))
+  }
+
+  // 分区渲染：汇总 有效 1 · 失效 1，失效原因展示
+  assert.ok(rc.innerHTML.includes('标注关系'), '应渲染标注关系分区')
+  assert.ok(rc.innerHTML.includes('rel-item-invalid'), '失效关系应有失效样式')
+  assert.ok(rc.textContent!.includes('目标标注已删除'), '应展示失效原因')
+  assert.ok(/有效[\s\S]*?1/.test(rc.querySelector('.rel-summary')!.textContent!), '应汇总有效数')
+  assert.ok(/失效[\s\S]*?1/.test(rc.querySelector('.rel-summary')!.textContent!), '应汇总失效数')
+
+  // 类型筛选：选「引用」后只剩 1 条
+  const filterSelect = rc.querySelector('#rel-filter') as HTMLSelectElement
+  assert.ok(filterSelect, '应渲染类型筛选下拉')
+  setSelect(filterSelect, '引用')
+  await wait()
+  assert.strictEqual(rc.querySelectorAll('.rel-item').length, 1, '筛选后应只剩 1 条关系')
+  setSelect(filterSelect, '')
+  await wait()
+  assert.strictEqual(rc.querySelectorAll('.rel-item').length, 2, '清除筛选后应显示全部')
+
+  // 自关联：源 = 目标 → 按钮禁用并提示
+  setSelect(rc.querySelector('#rel-source') as HTMLSelectElement, 'rl_a')
+  setSelect(rc.querySelector('#rel-target') as HTMLSelectElement, 'rl_a')
+  setNativeValue(rc.querySelector('#rel-type') as HTMLInputElement, '并列')
+  await wait()
+  const addBtn = () =>
+    [...rc.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === '建立关系',
+    ) as HTMLButtonElement
+  assert.ok(addBtn().disabled, '自关联时建立按钮应禁用')
+  assert.ok(rc.textContent!.includes('自关联'), '应提示禁止自关联')
+
+  // 完全重复：a → b + 因果（与预置 rel_1 相同）→ 禁用并提示
+  setSelect(rc.querySelector('#rel-target') as HTMLSelectElement, 'rl_b')
+  setNativeValue(rc.querySelector('#rel-type') as HTMLInputElement, ' 因果 ')
+  await wait()
+  assert.ok(addBtn().disabled, '完全重复时建立按钮应禁用')
+  assert.ok(rc.textContent!.includes('已存在相同'), '应提示完全重复')
+
+  // 正常建立：a → c + 并列 → 持久化到 localStorage
+  setSelect(rc.querySelector('#rel-target') as HTMLSelectElement, 'rl_c')
+  setNativeValue(rc.querySelector('#rel-type') as HTMLInputElement, '并列')
+  await wait()
+  assert.ok(!addBtn().disabled, '合法输入应可建立')
+  addBtn().click()
+  await wait()
+  const rels1 = saved().relations as Array<{ sourceId: string; targetId: string; type: string }>
+  assert.strictEqual(rels1.length, 3, '新关系应持久化')
+  assert.ok(
+    rels1.some((r) => r.sourceId === 'rl_a' && r.targetId === 'rl_c' && r.type === '并列'),
+    '新关系内容应正确（类型已归一化）',
+  )
+  assert.strictEqual(rc.querySelectorAll('.rel-item').length, 3, '列表应立即显示新关系')
+
+  // 删除目标标注 rl_c → 其参与的关系自动失效（记录保留）
+  ;(globalThis as unknown as { confirm: () => boolean }).confirm = () => true
+  window.confirm = () => true
+  const rlcItem = [...rc.querySelectorAll('.ann-item')].find((el) =>
+    el.textContent?.includes(relText.slice(6, 8)),
+  ) as HTMLElement
+  assert.ok(rlcItem, '应找到 rl_c 的标注卡片')
+  ;([...rlcItem.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === '删除',
+  ) as HTMLButtonElement).click()
+  await wait()
+  assert.strictEqual(saved().relations.length, 3, '删除标注后关系记录应保留')
+  const invalidTypes = [...rc.querySelectorAll('.rel-item-invalid .rel-type')].map(
+    (e) => e.textContent,
+  )
+  assert.ok(invalidTypes.includes('并列'), '删除端点标注后其关系应自动标为失效')
+  assert.strictEqual(
+    rc.querySelectorAll('.rel-item-invalid').length,
+    2,
+    '应有两条失效关系（预置失效 + 删除导致）',
+  )
+
+  // 删除一条关系 → 记录移除
+  const invalidCards = [...rc.querySelectorAll('.rel-item-invalid')]
+  ;([...invalidCards[0]!.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === '删除',
+  ) as HTMLButtonElement).click()
+  await wait()
+  assert.strictEqual(saved().relations.length, 2, '删除关系后应持久化')
+
+  // 导出 JSON 应包含 relations 字段（随导出保存）
+  assert.ok(Array.isArray(saved().relations), '本地数据应含 relations 数组')
+
+  rr.unmount()
+  rc.remove()
+  console.log('  ✓ 标注关系：建立校验、类型筛选、删除标注自动失效与持久化')
 }
 
 // 旧版数据（无 conflictRules / ignoredConflicts 字段）应无损加载
@@ -1533,6 +1700,7 @@ assert.strictEqual(reparsed.baseline, null)
 assert.ok(Array.isArray(reparsed.reviewedDiffs) && reparsed.reviewedDiffs.length === 0)
 assert.strictEqual(reparsed.sampleConfig, null)
 assert.ok(Array.isArray(reparsed.sampleReviews) && reparsed.sampleReviews.length === 0)
+assert.ok(Array.isArray(reparsed.relations) && reparsed.relations.length === 0)
 assert.strictEqual(reparsed.text, '一二三四五六')
 console.log('  ✓ 旧数据无损兼容并自动补齐冲突字段')
 

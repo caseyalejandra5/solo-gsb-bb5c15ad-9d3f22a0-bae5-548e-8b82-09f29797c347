@@ -3,6 +3,7 @@ import { normalizeIgnored, normalizeRules } from './conflicts'
 import { normalizeCoverageTags } from './coverage'
 import { normalizeBaseline, normalizeReviewedDiffs } from './snapshot'
 import { normalizeSampleConfig, normalizeSampleReviews, pruneSampleReviews } from './sampling'
+import { normalizeRelations } from './relations'
 
 const STORAGE_KEY = 'anchor-annotation-console:v1'
 
@@ -33,6 +34,8 @@ export function loadDocument(): DocumentData | null {
         normalizeSampleReviews(data.sampleReviews),
         data.annotations,
       ),
+      // 旧版本数据没有标注关系：无损补空；自关联 / 完全重复的条目在清洗时剔除
+      relations: normalizeRelations(data.relations),
       updatedAt: data.updatedAt ?? Date.now(),
     }
   } catch {

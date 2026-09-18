@@ -63,6 +63,7 @@ function baseInput(): ReportInput {
     conflictRules: [{ id: 'r1', tagA: '正面', tagB: '反面', createdAt: 1 }],
     ignoredConflicts: [],
     coverageTags: ['正面'],
+    relations: [],
   }
 }
 
@@ -158,6 +159,7 @@ function baseInput(): ReportInput {
       conflictRules: [],
       ignoredConflicts: [],
       coverageTags: [],
+      relations: [],
     },
     now,
   )
@@ -166,6 +168,8 @@ function baseInput(): ReportInput {
     pending: 0,
     conflicts: 0,
     coverageIssues: 0,
+    relationsValid: 0,
+    relationsInvalid: 0,
   })
   assert.ok(report.html.includes('原文为空'), '空原文应有提示')
   assert.ok(report.html.includes('没有已绑定标注'))

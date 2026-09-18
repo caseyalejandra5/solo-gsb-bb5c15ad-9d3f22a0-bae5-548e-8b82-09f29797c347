@@ -121,6 +121,22 @@ export interface SampleReview {
   updatedAt: number
 }
 
+/**
+ * 标注关系：两条已绑定标注之间的有向关系（源 → 目标 + 关系类型）。
+ * 记录本身不存「有效 / 失效」标志：有效性由两端标注的当前状态派生——
+ * 任一端被删除或进入待处理时关系自动失效，待处理端重新绑定后自动恢复。
+ */
+export interface AnnotationRelation {
+  id: string
+  /** 源标注 ID（有向边的起点） */
+  sourceId: string
+  /** 目标标注 ID（有向边的终点） */
+  targetId: string
+  /** 关系类型（归一化后的非空字符串，如「因果」「并列」） */
+  type: string
+  createdAt: number
+}
+
 export interface DocumentData {
   title: string
   text: string
@@ -139,6 +155,8 @@ export interface DocumentData {
   sampleConfig: SampleConfig | null
   /** 抽样复核结论：标注 ID + 标注内容签名，内容变化自动失效 */
   sampleReviews: SampleReview[]
+  /** 标注关系：有向的源 → 目标 + 关系类型；有效性随端点标注状态派生 */
+  relations: AnnotationRelation[]
   updatedAt: number
 }
 
@@ -198,6 +216,14 @@ export interface ExportPayload {
     note: string
     createdAt: string
     updatedAt: string
+  }>
+  /** 标注关系：有向的源 → 目标 + 关系类型（旧版文件缺省时按空数组处理） */
+  relations: Array<{
+    id: string
+    sourceId: string
+    targetId: string
+    type: string
+    createdAt: string
   }>
   annotations: Array<{
     id: string

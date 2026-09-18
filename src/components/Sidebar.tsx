@@ -3,6 +3,7 @@ import type { RefObject } from 'react'
 import type {
   Annotation,
   AnnotationBaseline,
+  AnnotationRelation,
   ConflictRule,
   SampleConfig,
   SampleReview,
@@ -15,10 +16,12 @@ import type { ConflictItem } from '../lib/conflicts'
 import type { CoverageIssue, CoverageResult } from '../lib/coverage'
 import type { SnapshotDiffItem } from '../lib/snapshot'
 import type { SampleQueueResult } from '../lib/sampling'
+import { listRelations, summarizeRelations } from '../lib/relations'
 import { SnapshotSection } from './SnapshotSection'
 import { SamplingSection } from './SamplingSection'
 import { DatasetSplitSection } from './DatasetSplitSection'
 import { BulkSection } from './BulkSection'
+import { RelationSection } from './RelationSection'
 
 interface Props {
   /** 文档标题（训练集划分导出的 JSONL 每行需要） */
@@ -60,6 +63,11 @@ interface Props {
   samplingSectionRef?: RefObject<HTMLElement | null>
   /** 训练集划分导出分区的滚动定位 ref（顶栏按钮用） */
   datasetSplitSectionRef?: RefObject<HTMLElement | null>
+  /** 标注关系：有向的源 → 目标 + 关系类型 */
+  relations: AnnotationRelation[]
+  /** 建立关系；返回错误原因（成功为 null），落地前以最新状态再校验一次 */
+  onAddRelation: (sourceId: string, targetId: string, type: string) => string | null
+  onDeleteRelation: (id: string) => void
   onFocus: (a: Annotation) => void
   onEdit: (a: Annotation) => void
   onRebindStart: (a: Annotation) => void
@@ -477,6 +485,10 @@ export const Sidebar = forwardRef<HTMLElement, Props>(function Sidebar(props, se
   const pendingReportCount = props.annotations.filter((a) => a.status === 'pending').length
   const coverageIssueTotal =
     props.coverageResult.gapCount + props.coverageResult.overlapCount
+  // 标注关系有效 / 失效汇总（与审阅报告口径一致：有效性随端点标注状态派生）
+  const relationSummary = summarizeRelations(
+    listRelations(props.relations, props.annotations),
+  )
   // 批量操作筛选用：仅当前标注中实际使用的标签（标签重命名 / 删除后随之更新）
   const annotationTagSet = new Set<string>()
   props.annotations.forEach((a) => a.tags.forEach((t) => annotationTagSet.add(t)))
@@ -488,8 +500,8 @@ export const Sidebar = forwardRef<HTMLElement, Props>(function Sidebar(props, se
         <h2 className="side-heading">审阅报告</h2>
         <p className="side-hint">
           按<strong>当前文档快照</strong>生成并下载一个自包含 HTML 报告：开头汇总
-          <strong>标注总数 / 待处理 / 冲突 / 覆盖问题</strong>，正文按原文位置渲染已绑定标注的
-          <strong>高亮、引文、标签与备注</strong>，并列出全部待处理标注与冲突双方。
+          <strong>标注总数 / 待处理 / 冲突 / 覆盖问题 / 有效与失效关系</strong>，正文按原文位置渲染已绑定标注的
+          <strong>高亮、引文、标签与备注</strong>，并列出全部待处理标注、冲突双方与标注关系明细。
           报告在浏览器本地生成，<strong>不会修改本地数据</strong>，可离线打开与打印。
         </p>
         <ul className="report-summary">
@@ -504,6 +516,12 @@ export const Sidebar = forwardRef<HTMLElement, Props>(function Sidebar(props, se
           </li>
           <li className={coverageIssueTotal > 0 ? 'report-summary-warn' : ''}>
             覆盖问题 <strong>{coverageIssueTotal}</strong>
+          </li>
+          <li>
+            有效关系 <strong>{relationSummary.valid}</strong>
+          </li>
+          <li className={relationSummary.invalid > 0 ? 'report-summary-warn' : ''}>
+            失效关系 <strong>{relationSummary.invalid}</strong>
           </li>
         </ul>
         <button
@@ -646,6 +664,15 @@ export const Sidebar = forwardRef<HTMLElement, Props>(function Sidebar(props, se
           </details>
         )}
       </section>
+
+      <RelationSection
+        annotations={props.annotations}
+        relations={props.relations}
+        activeId={props.activeId}
+        onAdd={props.onAddRelation}
+        onDelete={props.onDeleteRelation}
+        onFocus={props.onFocus}
+      />
 
       <section className="side-section">
         <div className="side-heading-row">

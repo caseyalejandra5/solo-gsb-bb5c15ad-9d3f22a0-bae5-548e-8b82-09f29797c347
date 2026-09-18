@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Annotation,
+  AnnotationRelation,
   ConflictRule,
   DocumentData,
   ExportPayload,
@@ -53,6 +54,7 @@ import {
   pruneSampleReviews,
   sampleReviewKey,
 } from './lib/sampling'
+import { canAddRelation, makeRelationId, normalizeRelations } from './lib/relations'
 import { TextView, type ViewRect } from './components/TextView'
 import { TextEditor } from './components/TextEditor'
 import { Sidebar } from './components/Sidebar'
@@ -88,6 +90,7 @@ const EMPTY_DOC: DocumentData = {
   reviewedDiffs: [],
   sampleConfig: null,
   sampleReviews: [],
+  relations: [],
   updatedAt: Date.now(),
 }
 
@@ -570,6 +573,40 @@ export default function App() {
     datasetSplitSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  // ---------- 标注关系 ----------
+
+  /**
+   * 建立一条有向关系：先以当前 doc 校验给出即时反馈，
+   * 落地时在 setDoc 内以最新状态再校验一次（与批量标签相同的原子语义）。
+   * 返回错误原因（成功为 null），供侧栏表单提示。
+   */
+  const addRelation = (sourceId: string, targetId: string, rawType: string): string | null => {
+    const preview = canAddRelation(doc.relations, doc.annotations, sourceId, targetId, rawType)
+    if (!preview.ok) return preview.reason
+    const now = Date.now()
+    setDoc((d) => {
+      const check = canAddRelation(d.relations, d.annotations, sourceId, targetId, rawType)
+      if (!check.ok) return d
+      const relation: AnnotationRelation = {
+        id: makeRelationId(),
+        sourceId,
+        targetId,
+        type: check.type,
+        createdAt: now,
+      }
+      return { ...d, relations: [...d.relations, relation], updatedAt: now }
+    })
+    return null
+  }
+
+  const deleteRelation = (id: string) => {
+    setDoc((d) => ({
+      ...d,
+      relations: d.relations.filter((r) => r.id !== id),
+      updatedAt: Date.now(),
+    }))
+  }
+
   // ---------- 编辑原文与重定位 ----------
 
   const applyEdit = (title: string, text: string) => {
@@ -717,6 +754,13 @@ export default function App() {
         createdAt: new Date(r.createdAt).toISOString(),
         updatedAt: new Date(r.updatedAt).toISOString(),
       })),
+      relations: doc.relations.map((r) => ({
+        id: r.id,
+        sourceId: r.sourceId,
+        targetId: r.targetId,
+        type: r.type,
+        createdAt: new Date(r.createdAt).toISOString(),
+      })),
       annotations: doc.annotations.map((a) => ({
         id: a.id,
         status: a.status,
@@ -802,6 +846,9 @@ export default function App() {
         normalizeSampleReviews(parsed.sampleReviews),
         annotations,
       )
+      // 旧版导出文件不含标注关系：无损补空；自关联 / 完全重复的条目在清洗时剔除。
+      // 引用已不存在标注的关系保留（按失效展示），与「删除标注 → 关系失效」口径一致
+      const relations = normalizeRelations(parsed.relations)
       setDoc({
         title: parsed.document.title,
         text: parsed.document.text,
@@ -819,6 +866,7 @@ export default function App() {
         reviewedDiffs,
         sampleConfig,
         sampleReviews,
+        relations,
         updatedAt: Date.now(),
       })
       setMode('view')
@@ -866,6 +914,7 @@ export default function App() {
       conflictRules: doc.conflictRules,
       ignoredConflicts: doc.ignoredConflicts,
       coverageTags: doc.coverageTags,
+      relations: doc.relations,
     })
     downloadHtmlFile(report.filename, report.html)
   }
@@ -1072,6 +1121,9 @@ export default function App() {
             onSetSampleReview={setSampleReview}
             samplingSectionRef={samplingSectionRef}
             datasetSplitSectionRef={datasetSplitSectionRef}
+            relations={doc.relations}
+            onAddRelation={addRelation}
+            onDeleteRelation={deleteRelation}
             onFocus={focusAnnotation}
             onEdit={(a) =>
               setPopover({
