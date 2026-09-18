@@ -121,6 +121,20 @@ export interface SampleReview {
   updatedAt: number
 }
 
+/**
+ * 两条标注之间的有向关系：从 sourceId 标注指向 targetId 标注，type 为用户填写的关系类型。
+ * 关系本身不参与重定位；有效性由两端标注的存在与绑定状态派生：
+ * 任一端被删除或进入待处理 → 关系自动标为失效；待处理端重新绑定后自动恢复。
+ * 禁止自关联（sourceId === targetId）与完全重复（源、目标、类型完全相同）。
+ */
+export interface AnnotationRelation {
+  id: string
+  sourceId: string
+  targetId: string
+  type: string
+  createdAt: number
+}
+
 export interface DocumentData {
   title: string
   text: string
@@ -139,6 +153,8 @@ export interface DocumentData {
   sampleConfig: SampleConfig | null
   /** 抽样复核结论：标注 ID + 标注内容签名，内容变化自动失效 */
   sampleReviews: SampleReview[]
+  /** 标注之间的有向关系；任一端被删除或进入待处理时派生为失效，重新绑定后恢复 */
+  relations: AnnotationRelation[]
   updatedAt: number
 }
 
@@ -198,6 +214,14 @@ export interface ExportPayload {
     note: string
     createdAt: string
     updatedAt: string
+  }>
+  /** 标注之间的有向关系（旧版文件缺省时按空数组处理） */
+  relations: Array<{
+    id: string
+    sourceId: string
+    targetId: string
+    type: string
+    createdAt: string
   }>
   annotations: Array<{
     id: string

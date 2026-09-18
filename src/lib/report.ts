@@ -12,6 +12,7 @@
 
 import type {
   Annotation,
+  AnnotationRelation,
   ConflictRule,
   IgnoredConflict,
 } from '../types'
@@ -26,6 +27,12 @@ import {
   isConflictSegment,
 } from './conflicts'
 import { auditCoverage } from './coverage'
+import {
+  buildRelationViews,
+  relationStats,
+  RELATION_INVALID_REASON_LABEL,
+  sortRelationViews,
+} from './relations'
 
 export interface ReportInput {
   title: string
@@ -34,6 +41,8 @@ export interface ReportInput {
   conflictRules: ConflictRule[]
   ignoredConflicts: IgnoredConflict[]
   coverageTags: string[]
+  /** 标注之间的有向关系（旧版调用方缺省时按空数组处理） */
+  relations?: AnnotationRelation[]
 }
 
 export interface ReportStats {
@@ -45,6 +54,10 @@ export interface ReportStats {
   conflicts: number
   /** 覆盖问题数（缺口 + 重叠；未配置覆盖标签时为 0） */
   coverageIssues: number
+  /** 有效关系数（两端标注均存在且已绑定） */
+  relationsActive: number
+  /** 失效关系数（任一端被删除或进入待处理） */
+  relationsInvalid: number
 }
 
 export interface ReviewReport {
@@ -129,6 +142,11 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
   const ignoredConflictCount = conflicts.length - activeConflicts.length
   const coverage = auditCoverage(annotations, text.length, input.coverageTags)
 
+  // 标注关系：有效性由两端标注派生（与侧栏口径一致）
+  const relations = input.relations ?? []
+  const relationViews = sortRelationViews(buildRelationViews(relations, annotations))
+  const relStats = relationStats(relationViews)
+
   const pendingAnnotations = annotations
     .filter((a) => a.status === 'pending')
     .sort((x, y) => y.updatedAt - x.updatedAt)
@@ -161,6 +179,8 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
     pending: pendingAnnotations.length,
     conflicts: activeConflicts.length,
     coverageIssues: coverage.gapCount + coverage.overlapCount,
+    relationsActive: relStats.active,
+    relationsInvalid: relStats.invalid,
   }
 
   // ---------- 原文（按位置渲染高亮 / 冲突 / 覆盖问题） ----------
@@ -318,6 +338,73 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
     })
     .join('')
 
+  // ---------- 标注关系 ----------
+
+  /** 关系一端：已绑定标注可跳到明细锚点；待处理 / 已删除显示状态说明 */
+  const relationEnd = (
+    label: string,
+    a: Annotation | null,
+    missingLabel: string,
+  ): string => {
+    if (!a) {
+      return (
+        `<div class="rep-rel-side">` +
+        `<div class="rep-ann-head"><span class="rep-rel-role">${label}</span>` +
+        `<span class="rep-rel-state rep-rel-state-missing">${escapeHtml(missingLabel)}</span></div>` +
+        `</div>`
+      )
+    }
+    const n = numberById.get(a.id)
+    const numBadge = n
+      ? `<a class="rep-ann-num rep-ann-num-link" href="#ann-${n}">${n}</a>`
+      : '<span class="rep-ann-num rep-ann-num-pending">!</span>'
+    const state =
+      a.status === 'pending'
+        ? '<span class="rep-rel-state rep-rel-state-pending">待处理</span>'
+        : ''
+    return (
+      `<div class="rep-rel-side">` +
+      `<div class="rep-ann-head"><span class="rep-rel-role">${label}</span>${numBadge}${state}` +
+      (n ? `<span class="rep-ann-pos">[${a.start}, ${a.end})</span>` : '') +
+      `</div>` +
+      `<blockquote class="rep-quote">${htmlWithBreaks(a.quote) || '<span class="rep-muted">（空引文）</span>'}</blockquote>` +
+      `<div class="rep-tags">${tagsHtml(a.tags)}</div>` +
+      `</div>`
+    )
+  }
+
+  const buildRelationItem = (
+    v: (typeof relationViews)[number],
+    i: number,
+    section: 'active' | 'invalid',
+  ): string => {
+    const cls = v.active ? 'rep-rel' : 'rep-rel rep-rel-invalid'
+    const state = v.active
+      ? ''
+      : `<p class="rep-rel-reason">已失效：${
+          v.invalidReason ? escapeHtml(RELATION_INVALID_REASON_LABEL[v.invalidReason]) : ''
+        }</p>`
+    return (
+      `<li id="relation-${section}-${i + 1}" class="${cls}">` +
+      `<div class="rep-rel-type"><span class="rep-rel-type-pill">${escapeHtml(v.relation.type)}</span></div>` +
+      `<div class="rep-rel-sides">` +
+      relationEnd('源', v.source, '源标注已删除') +
+      `<div class="rep-rel-arrow">→</div>` +
+      relationEnd('目标', v.target, '目标标注已删除') +
+      `</div>` +
+      state +
+      `</li>`
+    )
+  }
+  const activeRelationViews = relationViews.filter((v) => v.active)
+  const invalidRelationViews = relationViews.filter((v) => !v.active)
+  const activeRelationItems = activeRelationViews
+    .map((v, i) => buildRelationItem(v, i, 'active'))
+    .join('')
+  const invalidRelationItems = invalidRelationViews
+    .map((v, i) => buildRelationItem(v, i, 'invalid'))
+    .join('')
+
   // ---------- 组装 ----------
 
   const escTitle = escapeHtml(title || '未命名文档')
@@ -348,8 +435,10 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
       <li class="rep-stat${stats.pending > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.pending}</span><span class="rep-stat-label">待处理</span></li>
       <li class="rep-stat${stats.conflicts > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.conflicts}</span><span class="rep-stat-label">冲突</span></li>
       <li class="rep-stat${stats.coverageIssues > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.coverageIssues}</span><span class="rep-stat-label">覆盖问题</span></li>
+      <li class="rep-stat"><span class="rep-stat-num">${stats.relationsActive}</span><span class="rep-stat-label">有效关系</span></li>
+      <li class="rep-stat${stats.relationsInvalid > 0 ? ' rep-stat-warn' : ''}"><span class="rep-stat-num">${stats.relationsInvalid}</span><span class="rep-stat-label">失效关系</span></li>
     </ul>
-    <p class="rep-meta">冲突仅统计未忽略项${ignoredConflictCount > 0 ? `（另有 ${ignoredConflictCount} 条已忽略）` : ''}；覆盖问题为缺口与重叠之和。</p>
+    <p class="rep-meta">冲突仅统计未忽略项${ignoredConflictCount > 0 ? `（另有 ${ignoredConflictCount} 条已忽略）` : ''}；覆盖问题为缺口与重叠之和。有效关系要求两端标注均存在且已绑定；任一端删除或待处理即计入失效关系。</p>
   </section>
 
   <section class="rep-section">
@@ -391,6 +480,24 @@ export function buildReviewReport(input: ReportInput, now: Date = new Date()): R
       stats.coverageIssues === 0
         ? `<p class="rep-muted">${input.coverageTags.length > 0 ? '所选标签覆盖下没有缺口或重叠。' : '未配置覆盖审计标签。'}</p>`
         : `<ul class="rep-cov-list">${coverageItems}</ul>`
+    }
+  </section>
+
+  <section class="rep-section">
+    <h2>标注关系 · 有效（${activeRelationViews.length}）</h2>
+    ${
+      activeRelationViews.length === 0
+        ? '<p class="rep-muted">没有有效关系。</p>'
+        : `<ol class="rep-rel-list">${activeRelationItems}</ol>`
+    }
+  </section>
+
+  <section class="rep-section">
+    <h2>失效关系（${invalidRelationViews.length}）</h2>
+    ${
+      invalidRelationViews.length === 0
+        ? '<p class="rep-muted">没有失效关系。</p>'
+        : `<p class="rep-meta">下列关系因某端标注被删除或进入待处理而失效；待处理端重新绑定后关系自动恢复。</p><ol class="rep-rel-list">${invalidRelationItems}</ol>`
     }
   </section>
 
@@ -517,6 +624,30 @@ body {
 .rep-cov-flag-overlap { background: #f59e0b; }
 .rep-cov-anns { margin: 6px 0 0; padding-left: 20px; }
 .rep-cov-anns li { margin: 4px 0; }
+.rep-rel-list { margin: 0; padding: 0; list-style: none; }
+.rep-rel {
+  border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; margin: 10px 0;
+  scroll-margin-top: 12px;
+}
+.rep-rel-invalid { border-color: #e5c07b; background: #fdf8ec; }
+.rep-rel-type { margin: 2px 0 8px; }
+.rep-rel-type-pill {
+  display: inline-block; padding: 1px 10px;
+  background: #eef0ff; color: #4338ca; border: 1px solid #d4d8ff;
+  border-radius: 10px; font-size: 12.5px; font-weight: 600;
+}
+.rep-rel-sides { display: flex; gap: 10px; align-items: stretch; }
+.rep-rel-side { flex: 1 1 0; border: 1px solid #eee; border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.rep-rel-arrow { align-self: center; color: #4338ca; font-weight: 700; }
+.rep-rel-role {
+  display: inline-block; margin-right: 6px; padding: 0 8px; border-radius: 10px;
+  background: #eef2ff; color: #4338ca; font-size: 12px; font-weight: 700;
+}
+.rep-rel-state { font-size: 12.5px; padding: 0 8px; border-radius: 10px; }
+.rep-rel-state-pending { background: #fff7e6; color: #b26a00; }
+.rep-rel-state-missing { background: #fdecea; color: #b3261e; }
+.rep-rel-reason { margin: 8px 0 2px; color: #9a6b00; font-size: 13px; }
+.rep-rel-side .rep-quote { margin: 6px 0; }
 .rep-footer { color: #9ca3af; font-size: 12.5px; text-align: center; margin-top: 24px; }
 @media print {
   body { background: #fff; }

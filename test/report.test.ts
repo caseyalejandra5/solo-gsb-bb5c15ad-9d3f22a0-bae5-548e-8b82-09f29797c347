@@ -63,6 +63,13 @@ function baseInput(): ReportInput {
     conflictRules: [{ id: 'r1', tagA: '正面', tagB: '反面', createdAt: 1 }],
     ignoredConflicts: [],
     coverageTags: ['正面'],
+    relations: [
+      { id: 'rel1', sourceId: 'b1', targetId: 'b2', type: '支撑', createdAt: 1 },
+      // 引用待处理标注：失效关系
+      { id: 'rel2', sourceId: 'b1', targetId: 'p1', type: '引用', createdAt: 2 },
+      // 引用已删除标注：失效关系（两端都不在 annotations 中）
+      { id: 'rel3', sourceId: 'gone1', targetId: 'gone2', type: '反驳', createdAt: 3 },
+    ],
   }
 }
 
@@ -76,7 +83,10 @@ function baseInput(): ReportInput {
   assert.strictEqual(report.stats.conflicts, 1)
   // 只审计「正面」：b1 覆盖 [0,3)，[3,10) 为缺口（合并一条）
   assert.strictEqual(report.stats.coverageIssues, 1)
-  console.log('  ✓ 汇总统计：总数/待处理/冲突/覆盖问题')
+  // rel1 两端均已绑定 → 1 条有效；rel2 一端 pending、rel3 两端已删除 → 2 条失效
+  assert.strictEqual(report.stats.relationsActive, 1)
+  assert.strictEqual(report.stats.relationsInvalid, 2)
+  console.log('  ✓ 汇总统计：总数/待处理/冲突/覆盖问题/有效失效关系')
 }
 
 // 2. 纯函数：不修改输入；同输入同输出
@@ -125,7 +135,20 @@ function baseInput(): ReportInput {
   // 覆盖问题
   assert.ok(html.includes('覆盖问题（1）'), '应有覆盖问题分区与计数')
   assert.ok(html.includes('rep-cov-flag-gap'), '应列出缺口项')
-  console.log('  ✓ HTML 自包含、转义正确，含高亮/引文/标签/备注/待处理/冲突双方/覆盖问题')
+  // 标注关系：有效 1 条（b1 → b2，含类型与两端引文，端序号可跳转明细）
+  assert.ok(html.includes('标注关系 · 有效（1）'), '应有有效关系分区与计数')
+  assert.ok(html.includes('id="relation-active-1"'), '有效关系应有锚点')
+  assert.ok(html.includes('支撑'), '应列出关系类型')
+  assert.ok(html.includes('rep-rel-arrow'), '应渲染有向箭头')
+  const relSides = (html.match(/class="rep-rel-side"/g) ?? []).length
+  assert.strictEqual(relSides, 6, '3 条关系 × 2 端 = 6 个关系端')
+  // 失效关系 2 条：一端 pending（待处理标签）、两端已删除（占位说明）
+  assert.ok(html.includes('失效关系（2）'), '应有失效关系分区与计数')
+  assert.ok(html.includes('目标标注待处理'), '应列出 pending 失效原因')
+  assert.ok(html.includes('源与目标标注均已删除'), '应列出删除占位')
+  assert.ok(html.includes('有效关系'), '汇总中应含有效关系统计')
+  assert.ok(html.includes('失效关系'), '汇总中应含失效关系统计')
+  console.log('  ✓ HTML 自包含、转义正确，含高亮/引文/标签/备注/待处理/冲突双方/覆盖问题/关系')
 }
 
 // 4. 已忽略冲突不计入统计，但缺口/重叠仍按审计标签计算
@@ -166,12 +189,16 @@ function baseInput(): ReportInput {
     pending: 0,
     conflicts: 0,
     coverageIssues: 0,
+    relationsActive: 0,
+    relationsInvalid: 0,
   })
   assert.ok(report.html.includes('原文为空'), '空原文应有提示')
   assert.ok(report.html.includes('没有已绑定标注'))
   assert.ok(report.html.includes('没有待处理标注'))
   assert.ok(report.html.includes('没有未忽略冲突'))
   assert.ok(report.html.includes('未配置覆盖审计标签'))
+  assert.ok(report.html.includes('没有有效关系'))
+  assert.ok(report.html.includes('没有失效关系'))
   console.log('  ✓ 空文档边界')
 }
 

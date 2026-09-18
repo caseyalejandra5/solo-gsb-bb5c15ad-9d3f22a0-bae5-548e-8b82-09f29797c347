@@ -53,6 +53,14 @@ import {
   pruneSampleReviews,
   sampleReviewKey,
 } from './lib/sampling'
+import {
+  buildRelationViews,
+  isSelfRelation,
+  makeRelationId,
+  normalizeRelations,
+  relationKey,
+  relationStats,
+} from './lib/relations'
 import { TextView, type ViewRect } from './components/TextView'
 import { TextEditor } from './components/TextEditor'
 import { Sidebar } from './components/Sidebar'
@@ -88,6 +96,7 @@ const EMPTY_DOC: DocumentData = {
   reviewedDiffs: [],
   sampleConfig: null,
   sampleReviews: [],
+  relations: [],
   updatedAt: Date.now(),
 }
 
@@ -119,6 +128,7 @@ export default function App() {
   const snapshotSectionRef = useRef<HTMLElement | null>(null)
   const samplingSectionRef = useRef<HTMLElement | null>(null)
   const datasetSplitSectionRef = useRef<HTMLElement | null>(null)
+  const relationsSectionRef = useRef<HTMLElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 本地持久化
@@ -246,6 +256,16 @@ export default function App() {
       return a && !validKeys.has(sampleReviewKey(a.id, annotationContentSignature(a)))
     }).length
   }, [doc.sampleConfig, doc.sampleReviews, doc.annotations, sampleQueue])
+
+  // ---------- 标注关系 ----------
+
+  // 有效性完全由两端标注派生：删除标注或其进入待处理 → 失效；重新绑定后自动恢复
+  const relationViews = useMemo(
+    () => buildRelationViews(doc.relations, doc.annotations),
+    [doc.relations, doc.annotations],
+  )
+  const relationSummary = useMemo(() => relationStats(relationViews), [relationViews])
+  const invalidRelationCount = relationSummary.invalid
 
   const highlightIds: string[] = activePairIds
     ? [...activePairIds]
@@ -570,6 +590,45 @@ export default function App() {
     datasetSplitSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  // ---------- 标注关系 ----------
+
+  /**
+   * 建立有向关系：源、目标必须是两条不同的已绑定标注，类型非空；
+   * 「源 + 目标 + 类型」完全相同（方向敏感）的关系拒绝重复建立。
+   */
+  const createRelation = (sourceId: string, targetId: string, rawType: string) => {
+    const type = rawType.trim()
+    if (!sourceId || !targetId || !type) return
+    if (isSelfRelation(sourceId, targetId)) return
+    const byId = new Map(doc.annotations.map((a) => [a.id, a]))
+    const source = byId.get(sourceId)
+    const target = byId.get(targetId)
+    if (!source || !target || source.status !== 'bound' || target.status !== 'bound') return
+    const key = relationKey(sourceId, targetId, type)
+    if (doc.relations.some((r) => relationKey(r.sourceId, r.targetId, r.type) === key)) return
+    const now = Date.now()
+    setDoc((d) => ({
+      ...d,
+      relations: [
+        ...d.relations,
+        { id: makeRelationId(), sourceId, targetId, type, createdAt: now },
+      ],
+      updatedAt: now,
+    }))
+  }
+
+  const deleteRelation = (id: string) => {
+    setDoc((d) => ({
+      ...d,
+      relations: d.relations.filter((r) => r.id !== id),
+      updatedAt: Date.now(),
+    }))
+  }
+
+  const scrollToRelations = () => {
+    relationsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   // ---------- 编辑原文与重定位 ----------
 
   const applyEdit = (title: string, text: string) => {
@@ -717,6 +776,13 @@ export default function App() {
         createdAt: new Date(r.createdAt).toISOString(),
         updatedAt: new Date(r.updatedAt).toISOString(),
       })),
+      relations: doc.relations.map((r) => ({
+        id: r.id,
+        sourceId: r.sourceId,
+        targetId: r.targetId,
+        type: r.type,
+        createdAt: new Date(r.createdAt).toISOString(),
+      })),
       annotations: doc.annotations.map((a) => ({
         id: a.id,
         status: a.status,
@@ -802,6 +868,10 @@ export default function App() {
         normalizeSampleReviews(parsed.sampleReviews),
         annotations,
       )
+      // 旧版导出文件不含标注关系：无损补空。
+      // 有效性不在导入时裁决：引用待处理 / 已不存在标注的关系保留为失效记录，
+      // 重新绑定后可自动恢复（引用完全缺失 ID 时只显示失效，不丢弃）。
+      const relations = normalizeRelations(parsed.relations)
       setDoc({
         title: parsed.document.title,
         text: parsed.document.text,
@@ -819,6 +889,7 @@ export default function App() {
         reviewedDiffs,
         sampleConfig,
         sampleReviews,
+        relations,
         updatedAt: Date.now(),
       })
       setMode('view')
@@ -866,6 +937,7 @@ export default function App() {
       conflictRules: doc.conflictRules,
       ignoredConflicts: doc.ignoredConflicts,
       coverageTags: doc.coverageTags,
+      relations: doc.relations,
     })
     downloadHtmlFile(report.filename, report.html)
   }
@@ -943,6 +1015,16 @@ export default function App() {
               title="按区间连通组与稳定种子划分 train / validation / test 并导出 JSONL"
             >
               训练集划分
+            </button>
+          )}
+          {mode === 'view' && (
+            <button
+              className={`btn ${invalidRelationCount > 0 ? 'btn-warn' : 'btn-ghost'}`}
+              onClick={scrollToRelations}
+              title="在两条已绑定标注之间建立有向关系；失效关系在此恢复或清理"
+            >
+              标注关系
+              {invalidRelationCount > 0 && <span className="topbar-count">{invalidRelationCount}</span>}
             </button>
           )}
           <button className="btn btn-ghost" onClick={() => fileInputRef.current?.click()}>
@@ -1039,6 +1121,9 @@ export default function App() {
               {doc.sampleConfig && pendingSampleCount > 0 && (
                 <span className="foot-sampling">（{pendingSampleCount} 条抽样待复核）</span>
               )}
+              {relationSummary.total > 0 && invalidRelationCount > 0 && (
+                <span className="foot-relation">（{invalidRelationCount} 条关系失效）</span>
+              )}
               {' '}· 数据自动保存在本浏览器
             </footer>
           </section>
@@ -1072,6 +1157,10 @@ export default function App() {
             onSetSampleReview={setSampleReview}
             samplingSectionRef={samplingSectionRef}
             datasetSplitSectionRef={datasetSplitSectionRef}
+            relationViews={relationViews}
+            onCreateRelation={createRelation}
+            onDeleteRelation={deleteRelation}
+            relationsSectionRef={relationsSectionRef}
             onFocus={focusAnnotation}
             onEdit={(a) =>
               setPopover({

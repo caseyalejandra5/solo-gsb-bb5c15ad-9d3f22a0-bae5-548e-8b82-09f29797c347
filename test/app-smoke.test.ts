@@ -1499,6 +1499,231 @@ console.log('  ✓ 冲突审阅面板（含忽略折叠与交叠高亮）渲染�
   console.log('  ✓ 审阅报告：侧栏入口、HTML 下载、内容齐全、文件名规范且本地数据不变')
 }
 
+// 标注关系：建立有向关系（禁自关联/完全重复）→ 类型筛选与定位端 → 失效（待处理/删除）与恢复 → 导入导出
+{
+  const relText = '零一二三四五六七八九'
+  const mk = (id: string, start: number, end: number, tags: string[] = []) => ({
+    id,
+    quote: relText.slice(start, end),
+    start,
+    end,
+    note: '',
+    tags,
+    status: 'bound' as const,
+    createdAt: 1,
+    updatedAt: 1,
+    contextBefore: '',
+    contextAfter: '',
+  })
+  const relDoc = {
+    title: '关系文档',
+    text: relText,
+    updatedAt: Date.now(),
+    annotations: [mk('rel_a', 0, 2, ['论点']), mk('rel_b', 3, 5, ['论据']), mk('rel_c', 6, 8)],
+  }
+  localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(relDoc))
+  const ec = document.createElement('div')
+  ec.id = 'rootrel'
+  document.body.appendChild(ec)
+  const er = createRoot(ec)
+
+  await new Promise<void>((resolve) => {
+    er.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+
+  const section = () => ec.querySelector('.relations-section') as HTMLElement
+  assert.ok(section(), '应渲染标注关系分区')
+  assert.ok(ec.innerHTML.includes('标注关系'), '顶栏 / 侧栏应出现标注关系入口')
+
+  const setNativeValue = (el: HTMLInputElement | HTMLSelectElement, v: string) => {
+    const proto =
+      el instanceof window.HTMLSelectElement
+        ? window.HTMLSelectElement.prototype
+        : window.HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, v)
+    el.dispatchEvent(new window.Event('input', { bubbles: true }))
+    el.dispatchEvent(new window.Event('change', { bubbles: true }))
+  }
+  const wait = () => new Promise<void>((resolve) => setTimeout(resolve, 120))
+  const saved = () => JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+
+  // 1. 建立 rel_a → rel_b「支撑」
+  const selects = () => [...section()!.querySelectorAll('.rel-select')] as HTMLSelectElement[]
+  assert.strictEqual(selects().length, 2, '应有源 / 目标两个标注下拉')
+  setNativeValue(selects()[0]!, 'rel_a')
+  setNativeValue(selects()[1]!, 'rel_b')
+  setNativeValue(section()!.querySelector('.rel-type-input') as HTMLInputElement, '支撑')
+  await wait()
+  const submitBtn = [...section()!.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === '建立关系',
+  ) as HTMLButtonElement
+  assert.ok(!submitBtn.disabled, '两端不同且类型非空时应可提交')
+  submitBtn.click()
+  await wait()
+  let persisted = saved()
+  assert.strictEqual(persisted.relations.length, 1, '关系应持久化')
+  assert.deepStrictEqual(
+    [persisted.relations[0].sourceId, persisted.relations[0].targetId, persisted.relations[0].type],
+    ['rel_a', 'rel_b', '支撑'],
+  )
+  assert.ok(section()!.textContent!.includes('有效'), '应展示有效计数')
+
+  // 2. 禁止自关联：源与目标同为 rel_a → 提交禁用 + 提示
+  setNativeValue(selects()[0]!, 'rel_a')
+  setNativeValue(selects()[1]!, 'rel_a')
+  setNativeValue(section()!.querySelector('.rel-type-input') as HTMLInputElement, '自述')
+  await wait()
+  assert.ok(section()!.textContent!.includes('不能是同一条标注'), '应提示禁止自关联')
+  assert.ok(
+    ([...section()!.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === '建立关系',
+    ) as HTMLButtonElement).disabled,
+    '自关联时提交应禁用',
+  )
+
+  // 3. 禁止完全重复：rel_a → rel_b「支撑」已存在 → 禁用 + 提示；反向 + 同类型允许
+  setNativeValue(selects()[1]!, 'rel_b')
+  const typeInput = section()!.querySelector('.rel-type-input') as HTMLInputElement
+  setNativeValue(typeInput, '支撑')
+  await wait()
+  assert.ok(section()!.textContent!.includes('已存在完全相同的关系'), '应提示完全重复')
+  // 反向 rel_b → rel_a「支撑」是不同关系，应允许
+  setNativeValue(selects()[0]!, 'rel_b')
+  setNativeValue(selects()[1]!, 'rel_a')
+  await wait()
+  const submitBtn2 = [...section()!.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === '建立关系',
+  ) as HTMLButtonElement
+  assert.ok(!submitBtn2.disabled, '方向相反时不算重复，应允许建立')
+  submitBtn2.click()
+  await wait()
+  assert.strictEqual(saved().relations.length, 2)
+
+  // 再建一条 rel_a → rel_c「反驳」用于类型筛选
+  setNativeValue(selects()[0]!, 'rel_a')
+  setNativeValue(selects()[1]!, 'rel_c')
+  setNativeValue(section()!.querySelector('.rel-type-input') as HTMLInputElement, '反驳')
+  await wait()
+  ;([...section()!.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === '建立关系',
+  ) as HTMLButtonElement).click()
+  await wait()
+  assert.strictEqual(saved().relations.length, 3)
+
+  // 4. 类型筛选：只看「反驳」→ 1 条有效关系卡片；切回全部 → 3 条
+  const filterBtn = [...section()!.querySelectorAll('.rel-filter')].find((b) =>
+    b.textContent?.trim().startsWith('反驳'),
+  ) as HTMLButtonElement
+  filterBtn.click()
+  await wait()
+  assert.strictEqual(section()!.querySelectorAll('.rel-item:not(.rel-item-invalid)').length, 1)
+  ;([...section()!.querySelectorAll('.rel-filter')].find(
+    (b) => b.textContent?.trim().startsWith('全部'),
+  ) as HTMLButtonElement).click()
+  await wait()
+  assert.strictEqual(section()!.querySelectorAll('.rel-item').length, 3)
+
+  // 5. 点击关系一端可定位（绑定 onFocus）：点击后原文容器出现高亮 id
+  const firstEnd = section()!.querySelector('.rel-end') as HTMLButtonElement
+  assert.ok(firstEnd, '应渲染可点击的关系端')
+  firstEnd.click()
+  await wait()
+  // activeId 设置后 TextView 高亮该标注（侧栏端按钮带 active 样式）
+  assert.ok(
+    section()!.querySelector('.rel-end-active'),
+    '点击关系端后该端应处于激活高亮状态',
+  )
+
+  // 6. 删除标注 rel_c：rel_a→rel_c「反驳」进入失效折叠区，页脚/顶栏出现失效计数
+  const relCItem = [...ec.querySelectorAll('.ann-item')].find((el) =>
+    el.textContent?.includes(relText.slice(6, 8)),
+  ) as HTMLElement
+  ;(globalThis as unknown as { confirm: () => boolean }).confirm = () => true
+  window.confirm = () => true
+  ;([...relCItem.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === '删除',
+  ) as HTMLButtonElement).click()
+  await wait()
+  persisted = saved()
+  assert.strictEqual(persisted.relations.length, 3, '删除标注不自动删除关系记录')
+  const fold = section()!.querySelector('.rel-invalid-fold') as HTMLElement
+  assert.ok(fold, '失效关系应收入折叠区')
+  assert.ok(fold.textContent!.includes('目标标注已删除'), '应标注失效原因')
+  assert.ok(fold.textContent!.includes('反驳'), '折叠区应展示失效关系的类型')
+  assert.ok(ec.innerHTML.includes('标注关系'), '顶栏入口仍在')
+  // 侧栏汇总：有效 2 · 失效 1
+  assert.ok(/有效\s*2\s*条/.test(section()!.textContent!))
+  assert.ok(/失效\s*1\s*条/.test(section()!.textContent!))
+
+  // 7. 待处理 → 失效：直接把 rel_b 改为 pending 重新挂载；重新绑定后恢复
+  {
+    const d = saved()
+    const b = d.annotations.find((a: { id: string }) => a.id === 'rel_b')
+    b.status = 'pending'
+    b.pendingReason = '原文中已找不到该引文，需要手动重新选择'
+    b.start = 0
+    b.end = 0
+    d.updatedAt = Date.now()
+    localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(d))
+  }
+  er.unmount()
+  const ec2 = document.createElement('div')
+  ec2.id = 'rootrel2'
+  document.body.appendChild(ec2)
+  const er2 = createRoot(ec2)
+  await new Promise<void>((resolve) => {
+    er2.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+  const section2 = () => ec2.querySelector('.relations-section') as HTMLElement
+  // rel_a→rel_b 与 rel_b→rel_a 均因 rel_b pending 失效，加 rel_c 已删 → 有效 0 / 失效 3
+  assert.ok(/有效\s*0\s*条/.test(section2()!.textContent!))
+  assert.ok(/失效\s*3\s*条/.test(section2()!.textContent!))
+  assert.ok(section2()!.textContent!.includes('源标注待处理'), '应区分源/目标待处理原因')
+  assert.ok(section2()!.textContent!.includes('目标标注待处理'))
+
+  // 重新绑定 rel_b → 两条 pending 失效关系恢复（删除造成的那条仍失效）。
+  // jsdom 无法模拟原文拖选，这里直接以「rel_b 重新绑定成功」后的存档重新挂载，
+  // 验证关系有效性完全由两端标注状态派生（重新绑定即恢复）这一核心语义。
+  {
+    const d = JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+    const b = d.annotations.find((a: { id: string }) => a.id === 'rel_b')
+    b.status = 'bound'
+    b.start = 3
+    b.end = 5
+    b.pendingReason = undefined
+    d.updatedAt = Date.now()
+    localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(d))
+  }
+  er2.unmount()
+  const ec3 = document.createElement('div')
+  ec3.id = 'rootrel3'
+  document.body.appendChild(ec3)
+  const er3 = createRoot(ec3)
+  await new Promise<void>((resolve) => {
+    er3.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+  const section3 = () => ec3.querySelector('.relations-section') as HTMLElement
+  assert.ok(/有效\s*2\s*条/.test(section3()!.textContent!), '重新绑定后两条关系应恢复有效')
+  assert.ok(/失效\s*1\s*条/.test(section3()!.textContent!), '删除造成的失效关系仍为失效')
+
+  // 8. 导出结构含 relations；旧文件（无 relations）按空关系处理
+  persisted = JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+  assert.ok(Array.isArray(persisted.relations) && persisted.relations.length === 3, '本地存档应含关系')
+  assert.deepStrictEqual(
+    persisted.relations.map((r: { type: string }) => r.type).sort(),
+    ['反驳', '支撑', '支撑'],
+  )
+
+  er3.unmount()
+  ec.remove()
+  ec2.remove()
+  ec3.remove()
+  console.log('  ✓ 标注关系：建立/禁自关联/禁重复、类型筛选、定位、待处理失效与恢复、删除失效、持久化')
+}
+
 // 旧版数据（无 conflictRules / ignoredConflicts 字段）应无损加载
 const legacy = {
   title: '旧文档',
@@ -1533,8 +1758,9 @@ assert.strictEqual(reparsed.baseline, null)
 assert.ok(Array.isArray(reparsed.reviewedDiffs) && reparsed.reviewedDiffs.length === 0)
 assert.strictEqual(reparsed.sampleConfig, null)
 assert.ok(Array.isArray(reparsed.sampleReviews) && reparsed.sampleReviews.length === 0)
+assert.ok(Array.isArray(reparsed.relations) && reparsed.relations.length === 0)
 assert.strictEqual(reparsed.text, '一二三四五六')
-console.log('  ✓ 旧数据无损兼容并自动补齐冲突字段')
+console.log('  ✓ 旧数据无损兼容并自动补齐冲突字段与标注关系空数组')
 
 root4.unmount()
 container4.remove()
